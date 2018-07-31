@@ -38,15 +38,14 @@ hits when an intensity (y) > threshold*std dev + baseline
 outputs bool array where True values indicate signals in peak
 also, runs the baseline backwards to capture the back half of peaks 
 draws pretty heavily on https://bit.ly/2NNSKEL'''
-
 def baseline(df, lag = 15, rear_lag = 20, threshold = 1.9, rear_thresh=3, influence = 0.3):
 	y = np.array(df['tot_I']) #y is numpy array of intensities
 	filterY = np.array(y)
-	signals = [False] * len(y) # blank array of bools for mask of df
+	signals = [False] * len(y) # blank array of bools for mask of dataframe
 	avgFilter =[0]*len(y) #moving average over lag
 	stdFilter = [0]*len(y) # std deviation over lag
-	avgFilter[lag - 1] = np.mean(y[0:lag])
-	stdFilter[lag - 1] = np.std(y[0:lag])
+	avgFilter[lag - 1] = np.mean(y[0:lag])#calculate avg at start point
+	stdFilter[lag - 1] = np.std(y[0:lag])#calculate std dev at start poing
 
 	for i in range(lag,len(y)): #checks for peaks moving forward through index
 		if (y[i] - avgFilter[i-1] > threshold * stdFilter[i-1]):
@@ -63,22 +62,6 @@ def baseline(df, lag = 15, rear_lag = 20, threshold = 1.9, rear_thresh=3, influe
 		#print(avgFilter[i],stdFilter[i],(y[i]-avgFilter[i-1]))'''
 
 	for i in range((len(y)-rear_lag),-1,-1): #checks for peaks moving backwards through index
-
-		''' this was an attempt to find peaks based on the slope of a moving baseline,
-		with the assumption that a negative slope would indicate the start of the peak
-
-		Once I learn how git works I'll use actual version control instead of just commenting out 
-		big chunks of code
-
-		calculate slope of line over rear_lag
-		y_coords = np.arange(i,(i+rear_lag))
-		x_coords = y[i:(i+rear_lag)]
-		(slope, intercept) = np.polyfit(x_coords,y_coords,1)
-
-		
-		if slope < -0.001:
-			print("It's a hit!")
-			print(slope)'''
 
 		if (y[i] - avgFilter[i+1] > rear_thresh * stdFilter[i+1]):
 
@@ -142,6 +125,21 @@ def baseline2(df, lag = 10, threshold = 2, rear_thresh=3, influence = 0.5):
 		#print(avgFilter[i],stdFilter[i],(y[i]-avgFilter[i-1]))'''
 
 	for x in range(lag, len(y)-lag):
+		''' this was an attempt to find peaks based on the slope of a moving baseline,
+		with the assumption that a negative slope would indicate the start of the peak
+
+		Once I learn how git works I'll use actual version control instead of just commenting out 
+		big chunks of code
+
+		calculate slope of line over rear_lag
+		y_coords = np.arange(i,(i+rear_lag))
+		x_coords = y[i:(i+rear_lag)]
+		(slope, intercept) = np.polyfit(x_coords,y_coords,1)
+
+		
+		if slope < -0.001:
+			print("It's a hit!")
+			print(slope)'''
 		i = len(y)-x
 		if (y[i] - avgFilter[i+1] > rear_thresh * stdFilter[i+1]):
 			signals[i] = True
@@ -209,26 +207,28 @@ def integrate_peak(df):
 def area_ratio(peaks):
 	return integrate_peak(peaks[3])/integrate_peak(peaks[1])
 
-#I just stole this from stack overflow. It looks like it's working, but x and y are both undefined,
-#so it probably shouldn't work. 
-def r_squared(coeffs):
+#I just stole this from stack overflow.
+def r_squared(coeffs,x,y):
 	results = 0
 	p = np.poly1d(coeffs)
 	# fit values, and mean
 	yhat = p(x)
 	ybar = np.sum(y)/len(y)
-	ssreg = np.sum((yhat-ybar)**2)
-	sstot = np.sum((y - ybar)**2)
+	ssreg = np.sum((yhat-ybar)**2)#regression sum of squares
+	sstot = np.sum((y - ybar)**2)#Total Sum of Squares
 	results = ssreg / sstot
 	return results
 
+#def unknow_conc(unk):
 
 
-FILE_PATHS = ['Nicotine_1ppm_180712201814.csv']
-FILE_PATHS += ['Nicotine_2,5ppm_180712202451.csv']
-FILE_PATHS += ['Nicotine_5ppm_180712203135.csv']
-FILE_PATHS += ['Nicotine_7,5ppm_180712203822.csv']
-FILE_PATHS += ['Nicotine_10ppm_180712204456.csv']
+
+
+FILE_PATHS = ['standards_data/Nicotine_1ppm_180712201814.csv']
+FILE_PATHS += ['standards_data/Nicotine_2,5ppm_180712202451.csv']
+FILE_PATHS += ['standards_data/Nicotine_5ppm_180712203135.csv']
+FILE_PATHS += ['standards_data/Nicotine_7,5ppm_180712203822.csv']
+FILE_PATHS += ['standards_data/Nicotine_10ppm_180712204456.csv']
 area_ratios = [0,0,0,0,0]
 chroms = {}
 peaks = {}
@@ -236,24 +236,24 @@ peaks = {}
 for i in range(len(FILE_PATHS)):
 	chroms[i] = chrom_import(FILE_PATHS[i])
 	peaks[i] = peak_split(data_clean(baseline(chroms[i])),chroms[i])
-	ax = chroms[i].plot(x ='RT',y='tot_I')
+	#ax = chroms[i].plot(x ='RT',y='tot_I')
 	print(area_ratio(peaks[i]))
 	area_ratios[i] = area_ratio(peaks[i])
-	peaks[i][1].plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	peaks[i][3].plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	plt.show()
+	#peaks[i][1].plot(ax=ax, x ='RT',y='tot_I', style='ro')
+	#peaks[i][3].plot(ax=ax, x ='RT',y='tot_I', style='ro')
+	#plt.show()
 
-x = [1,2.5,5,7.5,10]
-y = area_ratios
+y = [0.9904,2.476,4.952,7.428,9.904]
+x = area_ratios
 (a, b) = np.polyfit(x, y, 1)
 coeffs = np.polyfit(x,y, 1)
-r2 = r_squared(coeffs)
+r2 = r_squared(coeffs, x, y)
 print('y = {:0.05f} x + {:0.05f}'.format(a, b))
 
 fig1, axes1 = plt.subplots(1,1,sharex=True)
 axes1.scatter(x, y, marker='s')
 axes1.plot(np.unique(x), np.poly1d((a,b))(np.unique(x)), linewidth=2.0, linestyle='--', color='r')
-axes1.set(xlabel='ppm', ylabel='Area Ratio')
+axes1.set(ylabel='ppm', xlabel='Area Ratio')
 fig1.suptitle('Nicotine\ny = {:0.05f} x + {:0.05f} -- R Squared = {:0.05f}'.format(a, b, r2))
 plt.show()
 
