@@ -25,12 +25,12 @@ def sum_I(df):
 	df.drop(columns = ['76','84','102','129','133','162'], inplace=True)
 	return df
 
-#combines above three modules
+#combines above three functions
 def chrom_import(file):
 	nic = sum_I(rename_RT(import_SIM_chrom(file)))	
 	return nic
 
-#Peak Find Module
+#Peak Find Function
 '''create moving baseline, where lag = length of moving baseline and threshold = std devs above baseline 
 influence variable lowers weighting for prior signal hits
 baseline avg stored in avgFilter , std dev stored in stdFilter
@@ -38,7 +38,7 @@ hits when an intensity (y) > threshold*std dev + baseline
 outputs bool array where True values indicate signals in peak
 also, runs the baseline backwards to capture the back half of peaks 
 draws pretty heavily on https://bit.ly/2NNSKEL'''
-def baseline(df, lag = 15, rear_lag = 20, threshold = 1.9, rear_thresh=3, influence = 0.3):
+def baseline(df, lag = 15, rear_lag = 25, threshold = 1.9, rear_thresh=3.4, influence = 0.2):
 	y = np.array(df['tot_I']) #y is numpy array of intensities
 	filterY = np.array(y)
 	signals = [False] * len(y) # blank array of bools for mask of dataframe
@@ -156,26 +156,30 @@ def baseline2(df, lag = 10, threshold = 2, rear_thresh=3, influence = 0.5):
 	return signals
 
 #takes criteria from baseline and returns bool array that hits on peaks > peak_width_min
-def data_clean(mask, peak_width_min=5):
+def data_clean(mask, peak_width_min=3):
 	clean_mask = [False] * len(mask)
 	consec = 0 #stores consecutive hits in mask
 	for i in range(1,len(mask)):
-		if (mask[i] == True) and (mask[i+1] == True):
-			clean_mask[i] = True
-			consec += 1
-			#print("A")
-		elif (consec >= 1) and (consec <= peak_width_min):#eliminates peaks less than peak width min
-			for x in range((i-consec),i+1):
-				clean_mask[x] = False
-			#print("b")
-			consec = 0
-		elif (clean_mask[i-1] == True) and (mask[i] == True): #prevents erasure of last signal in peak
-			clean_mask[i] = True
-			consec = 0
-			#print("C")
-		else:
-			clean_mask[i] = False
-			#print("D")
+		try:
+			if (mask[i] == True) and (mask[i+1] == True):
+				clean_mask[i] = True
+				consec += 1
+				#print("A")
+			elif (consec >= 1) and (consec <= peak_width_min):#eliminates peaks less than peak width min
+				for x in range((i-consec),i+1):
+					clean_mask[x] = False
+				#print("b")
+				consec = 0
+			elif (clean_mask[i-1] == True) and (mask[i] == True): #prevents erasure of last signal in peak
+				clean_mask[i] = True
+				consec = 0
+				#print("C")
+			else:
+				clean_mask[i] = False
+				#print("D")
+		except IndexError:
+			print("peak detected at end")
+			break
 	return clean_mask
 
 #splits peaks based on bool mask from data_clean
@@ -196,18 +200,17 @@ def peak_split(msk,df):
 #find total area underneath peak, then subtracts area between 0 and approximate baseline
 def integrate_peak(df):
 	intens= np.array(df['tot_I'])
-	last = len(intens) - 1
-	baseline_trap = len(intens) * ((intens[0] + intens[last])/2) #total area below peak. (0 to peak start) 
+	baseline_trap = len(intens) * ((intens[0] + intens[-1])/2) #total area below peak. (0 to peak start) 
 	area = 0
-	for i in range(0,last): #find total area of of peak, from 0 to peak height
+	for i in range(0,len(intens)-1): #find total area of of peak, from 0 to peak height
 		area += ((intens[i] + intens[i+1])/2)
 	return area-baseline_trap
 
 #takes peaks and return ratio of second peak/first peak
 def area_ratio(peaks):
-	return integrate_peak(peaks[3])/integrate_peak(peaks[1])
+	return integrate_peak(peak_select(peaks,Nic_exp_RT))/integrate_peak(peak_select(peaks,Quin_exp_RT))
 
-#I just stole this from stack overflow.
+#takes coefficients from np.polyfit, and the x and y coordinates fed to polyfit. Returns r squared
 def r_squared(coeffs,x,y):
 	results = 0
 	p = np.poly1d(coeffs)
@@ -219,10 +222,64 @@ def r_squared(coeffs,x,y):
 	results = ssreg / sstot
 	return results
 
-#def unknow_conc(unk):
+#Takes coefficients from response curve, plus a chromatogram. Returns the area ratio (Nic/Quin)
+def unknown_conc(coeffs, unk):
+	unk_peaks = {}
+	area_ratio_unk = 0
+	unk_peaks = peak_split(data_clean(baseline(unk)), unk)
+	ax = unk.plot(x ='RT',y='tot_I')
+	peak_select(unk_peaks,Nic_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
+	peak_select(unk_peaks,Quin_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
+	plt.show()
+	area_ratio_unk = area_ratio(unk_peaks)
+	curve = np.poly1d(coeffs)
+	print(curve(area_ratio_unk))
+	return  curve(area_ratio_unk)
 
+#takes a list of peaks from peak_split and a retention time (rt), 
+#returns the peak that contains the specificed retention time
+def peak_select(peaks, rt):
+	for i in range(len(peaks)):
+		if rt in peaks[i].RT.round(decimals=2).values:
+			return peaks[i]
 
+#finds the width of a peak at half its height
+def half_height(peak,chrom):
+	left_points = np.zeros((2,2), dtype=float)
+	right_points = np.zeros((2,2), dtype=float)
+	baseline_points = np.zeros((2,2), dtype=float)
+	baseline_points[0] = peak.iloc[0].values#RT and Intesity and for first point in peak
+	baseline_points[1] = peak.iloc[len(peak.index)-1].values#RT and Intesity and for last point in peak
+	baseline = np.polyfit(baseline_points[:,0],baseline_points[:,1],1)
+	base_curve = np.poly1d(baseline)
+	height_tot = peak['tot_I'].idxmax(axis = 0)#index for the highest signal in the peak
+	peak_max = peak.loc[height_tot].values#RT and Intesity for highest point
+	height = peak_max[1] - base_curve(peak_max[0])#Height = intensity at height minus calculated baseline
+	half_height = height/2
+	#splits peak at peak. left curve is before peak, right_curve is points after peak
+	left_curve = peak.loc[0:height_tot]
+	right_curve = peak.loc[height_tot:]
+	#splits left_curve into peaks less than half height and greater than half height
+	left_points_less_half = left_curve[(left_curve['tot_I'] < half_height)]
+	left_points_greater_half = left_curve[(left_curve['tot_I'] > half_height)]
+	#splits right_curve into peaks less than half height and greater than half height
+	right_points_less_half = right_curve[(right_curve['tot_I'] < half_height)]
+	right_points_greater_half = right_curve[(right_curve['tot_I'] > half_height)]
+	#assigns points(RT,tot_I) to array that will be used to calculate eqn of line
+	left_points[0] = left_points_less_half.iloc[-1].values
+	left_points[1] = left_points_greater_half.iloc[0].values
+	right_points[0] = right_points_less_half.iloc[0].values
+	right_points[1] = right_points_greater_half.iloc[-1].values
+	left_line = np.polyfit(left_points[:,1],left_points[:,0],1)
+	left_curve = np.poly1d(left_line)
+	right_line = np.polyfit(right_points[:,1],right_points[:,0],1)
+	right_curve = np.poly1d(right_line)
+	half_height_width = right_curve(half_height) - left_curve(half_height)
+	return half_height_width
 
+Nic_exp_RT = 2.49
+Quin_exp_RT = 1.89	
+t_diff_min = 0.0102#0.612 seconds
 
 FILE_PATHS = ['standards_data/Nicotine_1ppm_180712201814.csv']
 FILE_PATHS += ['standards_data/Nicotine_2,5ppm_180712202451.csv']
@@ -236,34 +293,33 @@ peaks = {}
 for i in range(len(FILE_PATHS)):
 	chroms[i] = chrom_import(FILE_PATHS[i])
 	peaks[i] = peak_split(data_clean(baseline(chroms[i])),chroms[i])
-	#ax = chroms[i].plot(x ='RT',y='tot_I')
+	ax = chroms[i].plot(x ='RT',y='tot_I')
 	print(area_ratio(peaks[i]))
 	area_ratios[i] = area_ratio(peaks[i])
-	#peaks[i][1].plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	#peaks[i][3].plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	#plt.show()
+	peak_select(peaks[i],Nic_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
+	peak_select(peaks[i],Quin_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
+	plt.show()
 
-y = [0.9904,2.476,4.952,7.428,9.904]
 x = area_ratios
+y = [0.9904,2.476,4.952,7.428,9.904]
 (a, b) = np.polyfit(x, y, 1)
 coeffs = np.polyfit(x,y, 1)
 r2 = r_squared(coeffs, x, y)
-print('y = {:0.05f} x + {:0.05f}'.format(a, b))
+print('y = {:0.05f} x + {:0.05f} : R Squared = {:0.05f}'.format(a, b, r2))
 
 fig1, axes1 = plt.subplots(1,1,sharex=True)
 axes1.scatter(x, y, marker='s')
 axes1.plot(np.unique(x), np.poly1d((a,b))(np.unique(x)), linewidth=2.0, linestyle='--', color='r')
 axes1.set(ylabel='ppm', xlabel='Area Ratio')
-fig1.suptitle('Nicotine\ny = {:0.05f} x + {:0.05f} -- R Squared = {:0.05f}'.format(a, b, r2))
+fig1.suptitle('Nicotine\ny = {:0.05f} x + {:0.05f} : R Squared = {:0.05f}'.format(a, b, r2))
 plt.show()
 
+UNKNOWNS = ['Unknowns/A.csv']
+UNKNOWNS += ['Unknowns/B.csv']
+UNKNOWNS += ['Unknowns/C.csv']
+UNKNOWNS += ['Unknowns/D.csv']
 
-'''nic = chrom_import("Nicotine_5ppm.csv")
-crit = baseline(nic)
-clean_crit = data_clean(crit)
-peaks = peak_split(clean_crit, nic)
-ax = nic.plot(x ='RT',y='tot_I')
-peaks[1].plot(ax=ax, x ='RT',y='tot_I', style='ro')
-peaks[3].plot(ax=ax, x ='RT',y='tot_I', style='ro')
-plt.show()'''
+for file in UNKNOWNS:
+	unknown = chrom_import(file)
+	unknown_conc(coeffs, unknown)
 
