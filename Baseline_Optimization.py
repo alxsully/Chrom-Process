@@ -38,7 +38,7 @@ hits when an intensity (y) > threshold*std dev + baseline
 outputs bool array where True values indicate signals in peak
 also, runs the baseline backwards to capture the back half of peaks 
 draws pretty heavily on https://bit.ly/2NNSKEL'''
-def baseline(df, lag = 15, rear_lag = 25, threshold = 1.9, rear_thresh=3.4, influence = 0.5):
+def baseline(df, lag = 15, rear_lag = 20, threshold = 1.9, rear_thresh=3, influence = 0.3):
 	y = np.array(df['tot_I']) #y is numpy array of intensities
 	filterY = np.array(y)
 	signals = [False] * len(y) # blank array of bools for mask of dataframe
@@ -155,12 +155,12 @@ def baseline2(df, lag = 10, threshold = 2, rear_thresh=3, influence = 0.5):
 
 	return signals
 
-#takes mask from baseline and returns bool array containing  a number of consecutive True signals > peak_width_min
+#takes criteria from baseline and returns bool array that hits on peaks > peak_width_min
 def data_clean(mask, peak_width_min=3):
 	clean_mask = [False] * len(mask)
 	consec = 0 #stores consecutive hits in mask
 	for i in range(1,len(mask)):
-		try:
+		try:#This try block catches errors thrown if the last signal is marked as a peak. If this happens, mask[i+1] throws IndexError
 			if (mask[i] == True) and (mask[i+1] == True):
 				clean_mask[i] = True
 				consec += 1
@@ -200,17 +200,19 @@ def peak_split(msk,df):
 #find total area underneath peak, then subtracts area between 0 and approximate baseline
 def integrate_peak(df):
 	intens= np.array(df['tot_I'])
-	baseline_trap = len(intens) * ((intens[0] + intens[-1])/2) #total area below peak. (0 to peak start) 
+	last = len(intens) - 1
+	baseline_trap = len(intens) * ((intens[0] + intens[last])/2) #total area below peak. (0 to peak start) 
 	area = 0
-	for i in range(0,len(intens)-1): #find total area of of peak, from 0 to peak height
+	for i in range(0,last): #find total area of of peak, from 0 to peak height
 		area += ((intens[i] + intens[i+1])/2)
 	return area-baseline_trap
 
 #takes peaks and return ratio of second peak/first peak
 def area_ratio(peaks):
-	return integrate_peak(peak_select(peaks,Nic_exp_RT))/integrate_peak(peak_select(peaks,Quin_exp_RT))
+	return integrate_peak(peaks[3])/integrate_peak(peaks[1])
 
-#takes coefficients from np.polyfit, and the x and y coordinates fed to polyfit. Returns r squared
+#
+#takes coefficients from np.polyfit, and the x and y coordinates fed to polyfit. Calculates r squared
 def r_squared(coeffs,x,y):
 	results = 0
 	p = np.poly1d(coeffs)
@@ -222,18 +224,13 @@ def r_squared(coeffs,x,y):
 	results = ssreg / sstot
 	return results
 
-#Takes coefficients from response curve, plus a chromatogram. Returns the area ratio (Nic/Quin)
+#Takes coefficients from repsonse curve, plus a chromatogram. Returns the area ratio (Nic/Quin)
 def unknown_conc(coeffs, unk):
 	unk_peaks = {}
 	area_ratio_unk = 0
 	unk_peaks = peak_split(data_clean(baseline(unk)), unk)
-	ax = unk.plot(x ='RT',y='tot_I')
-	peak_select(unk_peaks,Nic_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	peak_select(unk_peaks,Quin_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	plt.show()
 	area_ratio_unk = area_ratio(unk_peaks)
 	curve = np.poly1d(coeffs)
-	print(curve(area_ratio_unk))
 	return  curve(area_ratio_unk)
 
 #takes a list of peaks from peak_split and a retention time (rt), 
@@ -243,31 +240,8 @@ def peak_select(peaks, rt):
 		if rt in peaks[i].RT.round(decimals=2).values:
 			return peaks[i]
 
-def peak_idx(peaks,rt):
-	for i in range(len(peaks)):
-		if rt in peaks[i].RT.round(decimals=2).values:
-			return i
-
-def noise_find(chrom, width):
-	scans = width*20/t_diff_min
-	chrom_array = np.array(chrom['tot_I'])
-	baseline = chrom_array[10:(int(round(scans))+10)]
-	high = np.amax(baseline)
-	low = np.amin(baseline)
-	return high-low
-
-def signal_to_noise(peaks, rt):
-	selected_peak = peak_select(peaks, rt)
-	selected_peak_idx = peak_idx(peaks, rt)
-	width, height = half_height(selected_peak)
-	print("Height: {:0.05f} , Width: {:0.05f}".format(height, width))
-	noise = noise_find(peaks[(selected_peak_idx+1)], width)
-	return height/noise
-
-
-
 #finds the width of a peak at half its height
-def half_height(peak):
+def half_height(peak,chrom):
 	left_points = np.zeros((2,2), dtype=float)
 	right_points = np.zeros((2,2), dtype=float)
 	baseline_points = np.zeros((2,2), dtype=float)
@@ -298,13 +272,20 @@ def half_height(peak):
 	right_line = np.polyfit(right_points[:,1],right_points[:,0],1)
 	right_curve = np.poly1d(right_line)
 	half_height_width = right_curve(half_height) - left_curve(half_height)
-	return half_height_width, height
+	return half_height_width
+
 
 Nic_exp_RT = 2.49
-Quin_exp_RT = 1.89	
-t_diff_min = 0.0102#0.612 seconds
+Quinoline_exp_RT = 1.89	
+t_diff_min = 0.0102#0.612 seconds		
 
-FILE_PATHS = ['standards_data/Nicotine_1ppm_180712201814.csv']
+C = chrom_import('Unknowns/C.csv')
+coeffs = np.array([1.51147293, 0.86384225])
+unknown_conc(coeffs, C)
+nicotine_peak_df = peak_select(peak_split(data_clean(baseline(C)), C), Quinoline_exp_RT)
+half_height(nicotine_peak_df,C)
+
+'''FILE_PATHS = ['standards_data/Nicotine_1ppm_180712201814.csv']
 FILE_PATHS += ['standards_data/Nicotine_2,5ppm_180712202451.csv']
 FILE_PATHS += ['standards_data/Nicotine_5ppm_180712203135.csv']
 FILE_PATHS += ['standards_data/Nicotine_7,5ppm_180712203822.csv']
@@ -319,9 +300,8 @@ for i in range(len(FILE_PATHS)):
 	ax = chroms[i].plot(x ='RT',y='tot_I')
 	print(area_ratio(peaks[i]))
 	area_ratios[i] = area_ratio(peaks[i])
-	peak_select(peaks[i],Nic_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	peak_select(peaks[i],Quin_exp_RT).plot(ax=ax, x ='RT',y='tot_I', style='ro')
-	print('Signal to Noise Ratio: {:0.05f}'.format(signal_to_noise(peaks[i], Nic_exp_RT)))
+	peaks[i][1].plot(ax=ax, x ='RT',y='tot_I', style='ro')
+	peaks[i][3].plot(ax=ax, x ='RT',y='tot_I', style='ro')
 	plt.show()
 
 x = area_ratios
@@ -335,17 +315,15 @@ fig1, axes1 = plt.subplots(1,1,sharex=True)
 axes1.scatter(x, y, marker='s')
 axes1.plot(np.unique(x), np.poly1d((a,b))(np.unique(x)), linewidth=2.0, linestyle='--', color='r')
 axes1.set(ylabel='ppm', xlabel='Area Ratio')
-fig1.suptitle('Nicotine\ny = {:0.05f} x + {:0.05f} : R Squared = {:0.05f}'.format(a, b, r2))
+fig1.suptitle('Nicotine\ny = {:0.05f} x + {:0.05f} -- R Squared = {:0.05f}'.format(a, b, r2))
 plt.show()
 
-
-
-UNKNOWNS = ['Unknowns/3,1_ppm_n_q.csv']
-UNKNOWNS += ['Unknowns/6,1_ppm_n_q.csv']
-UNKNOWNS += ['Unknowns/9,1_ppm_n_q.csv']
-
+UNKNOWNS = ['Unknowns/A.csv']
+UNKNOWNS += ['Unknowns/B.csv']
+UNKNOWNS += ['Unknowns/C.csv']
+UNKNOWNS += ['Unknowns/D.csv']
 
 for file in UNKNOWNS:
 	unknown = chrom_import(file)
-	unknown_conc(coeffs, unknown)
+	unknown_conc(coeffs, unknown)'''
 
